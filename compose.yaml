@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    stop_grace_period: 20s
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - /proc/loadavg:/host/proc/loadavg:ro
+      - /proc/meminfo:/host/proc/meminfo:ro
+      - /proc/uptime:/host/proc/uptime:ro
