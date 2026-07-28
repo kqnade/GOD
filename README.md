@@ -14,13 +14,14 @@
 - 外部AI APIを使わず、学習・検索・応答をローカルで完結
 - 保存対象を環境変数で指定した1サーバー・1チャンネルに限定
 - 発言の編集・削除、本人による忘却、管理者による消去に対応
-- Docker ComposeまたはPython 3.11以上で起動
+- Docker ComposeまたはPython 3.11以上で起動（開発基準はPython 3.14）
 - 天気、地震、計算、DNS、QRコードなどの補助コマンドを搭載
 
 ## 必要なもの
 
 - Discord Bot Tokenと、Botを追加できるDiscordサーバー
 - Docker Compose、またはPython 3.11以上
+- Pythonで直接動かす場合は[uv](https://docs.astral.sh/uv/)
 - 初回のDockerビルドまたはPythonパッケージ導入時のインターネット接続
 
 ## 何をするBotか
@@ -135,13 +136,11 @@ docker compose logs -f bot
 ### 3-B. Pythonで起動する
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+uv sync --locked
 set -a
 source .env
 set +a
-god-bot
+uv run god-bot
 ```
 
 ### 4. Discordで話す
@@ -202,11 +201,12 @@ god-bot
 ## テスト
 
 ```bash
-python -m pip install -e .
-python -m unittest discover -s tests -v
+uv sync --locked
+uv run python -m unittest discover -s tests -v
+uv run ruff check .
 ```
 
-GitHub ActionsでもPython 3.11と3.13に対して同じテストを実行します。
+GitHub ActionsでもPython 3.11と3.14に対して同じ検証を実行します。
 
 ## ディレクトリ構成
 

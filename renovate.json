@@ -1,0 +1,60 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "dependencyDashboard": true,
+  "labels": [
+    "dependencies"
+  ],
+  "schedule": [
+    "* 0-5 * * 1"
+  ],
+  "timezone": "Asia/Tokyo",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "* 0-5 * * 1"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "version: \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\" # renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Group non-major Python dependency updates",
+      "groupName": "Python dependencies",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest"
+      ]
+    },
+    {
+      "description": "Group GitHub Actions updates",
+      "groupName": "GitHub Actions",
+      "matchManagers": [
+        "github-actions"
+      ]
+    },
+    {
+      "description": "Group container image updates",
+      "groupName": "container images",
+      "matchManagers": [
+        "dockerfile"
+      ]
+    }
+  ]
+}

@@ -25,8 +25,8 @@ from .persona import apply_cute_tone, apply_persona
 from .qr import QrError, make_qr_image
 from .scheduler import JST, is_sleeping_time, next_lifecycle_event
 from .utilities import (
-    CalculationError,
     HELP_TEXT,
+    CalculationError,
     calculate,
     choose_option,
     convert_unit,

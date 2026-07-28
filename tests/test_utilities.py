@@ -7,8 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from god_bot.utilities import (
-    CalculationError,
     HELP_TEXT,
+    CalculationError,
     calculate,
     choose_option,
     convert_unit,

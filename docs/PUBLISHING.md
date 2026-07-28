@@ -19,7 +19,8 @@
 
 - [ ] GitHubのSecret scanningとPush protectionを有効にした
 - [ ] GitHubのPrivate vulnerability reportingを有効にした
-- [ ] Dependabotまたは同等の依存関係更新を設定した
+- [ ] Renovate Appをリポジトリで有効化し、Dependency Dashboardが作成
+      されることを確認した
 - [ ] 公開リポジトリ用の連絡先と行動規範を用意した
 
 ## 公開対象の確認例

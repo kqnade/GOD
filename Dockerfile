@@ -1,24 +1,24 @@
-FROM python:3.13-slim
+FROM ghcr.io/astral-sh/uv:0.11.32 AS uv
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
-COPY pyproject.toml ./
 RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir \
-    "discord.py==2.7.1" \
-    "Janome==0.5.0" \
-    "Pillow==11.3.0" \
-    "qrcode==8.2"
 
-COPY README.md ./
+COPY --from=uv /uv /uvx /bin/
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --locked --no-dev --no-install-project
+
 COPY src ./src
+RUN uv sync --locked --no-dev --no-editable
+
 COPY corpus ./corpus
-RUN pip install --no-cache-dir --no-deps .
 
 RUN mkdir -p /app/data
 VOLUME ["/app/data"]

@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 from god_bot.earthquake import EarthquakeError, latest_earthquake
 
-
 FEED_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <entry>

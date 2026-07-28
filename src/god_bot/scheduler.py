@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Literal, NamedTuple
 
-
 JST = timezone(timedelta(hours=9), name="JST")
 LifecycleEventName = Literal["wake", "sleep_warning", "sleep"]
 

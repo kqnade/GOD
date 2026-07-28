@@ -7,7 +7,6 @@ import signal
 from .bot import LearningBot
 from .config import Config
 
-
 LOGGER = logging.getLogger(__name__)
 
 

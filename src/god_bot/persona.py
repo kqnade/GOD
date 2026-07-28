@@ -5,7 +5,6 @@ import re
 
 from janome.tokenizer import Tokenizer
 
-
 _TOKENIZER = Tokenizer()
 _CASUAL_SENTENCE_RE = re.compile(
     r"(?P<body>[^。.!！?？\n]+?)"
