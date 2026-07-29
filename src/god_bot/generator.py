@@ -40,6 +40,7 @@ class _NounTerm:
 _TOKENIZER = Tokenizer()
 _NON_REUDY_TAIL_CHARS = re.compile(r"[^ぁ-んー−？！?!\.]+")
 _ASCII_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.+#-]*\Z")
+_DAILY_LUCKY_SAMPLE_SIZE = 100
 
 
 def load_seed_corpus(path: Path | None) -> list[MemoryMessage]:
@@ -580,6 +581,9 @@ class ReudyEngine:
     ) -> str:
         """Build a stable adjective+noun lucky item for a JST calendar day."""
         sources = dynamic_messages or self._seed_messages
+        if len(sources) > _DAILY_LUCKY_SAMPLE_SIZE:
+            sample_rng = random.Random(day.isoformat())
+            sources = sample_rng.sample(sources, _DAILY_LUCKY_SAMPLE_SIZE)
         nouns: list[str] = []
         modifiers: list[str] = []
         for message in sources:

@@ -202,7 +202,8 @@ class LearningBot(discord.Client):
                 self.config.target_channel_id,
                 limit=self.config.candidate_pool_size,
             )
-            lucky_item = self._engine.daily_lucky_item(
+            lucky_item = await asyncio.to_thread(
+                self._engine.daily_lucky_item,
                 memories,
                 datetime.now(JST).date(),
             )

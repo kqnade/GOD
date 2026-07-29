@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from god_bot.generator import (
     MemoryMessage,
@@ -342,6 +343,28 @@ class ReudyGeneratorTests(unittest.TestCase):
             any(first.endswith(noun) for noun in ("レモン", "時計", "カレー", "帽子"))
         )
         self.assertNotIn(first, {"レモン", "時計", "カレー", "帽子"})
+
+    def test_daily_lucky_item_bounds_seed_corpus_work(self) -> None:
+        messages = [
+            MemoryMessage(index, 1, f"項目{index}")
+            for index in range(1_000)
+        ]
+        engine = ReudyEngine(seed_messages=messages, rng=random.Random(2))
+        day = date(2026, 7, 29)
+        with (
+            patch("god_bot.generator._noun_terms", return_value=()) as nouns,
+            patch.object(
+                __import__(
+                    "god_bot.generator",
+                    fromlist=["_TOKENIZER"],
+                )._TOKENIZER,
+                "tokenize",
+                return_value=(),
+            ) as tokenize,
+        ):
+            engine.daily_lucky_item([], day)
+        self.assertEqual(nouns.call_count, 100)
+        self.assertEqual(tokenize.call_count, 100)
 
     def test_summarizes_learned_messages(self) -> None:
         messages = [
