@@ -5,11 +5,15 @@ import random
 import re
 import shlex
 from collections import Counter, deque
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
 from janome.tokenizer import Tokenizer
+
+from .proper_nouns import normalize_proper_noun
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,8 +30,16 @@ class GeneratedReply:
     base_message_id: int
 
 
+@dataclass(frozen=True, slots=True)
+class _NounTerm:
+    surface: str
+    token_indices: tuple[int, ...]
+    proper: bool
+
+
 _TOKENIZER = Tokenizer()
 _NON_REUDY_TAIL_CHARS = re.compile(r"[^ぁ-んー−？！?!\.]+")
+_ASCII_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.+#-]*\Z")
 
 
 def load_seed_corpus(path: Path | None) -> list[MemoryMessage]:
@@ -57,20 +69,195 @@ def load_seed_corpus(path: Path | None) -> list[MemoryMessage]:
     return messages
 
 
-def extract_words(text: str) -> tuple[str, ...]:
+def _looks_like_ascii_name(surface: str) -> bool:
+    return bool(_ASCII_NAME_RE.fullmatch(surface))
+
+
+def _ascii_case_insensitive(value: str) -> str:
+    return "".join(
+        char.lower() if "A" <= char <= "Z" else char
+        for char in value
+    )
+
+
+def _noun_candidate(token: object) -> bool:
+    parts = token.part_of_speech.split(",")
+    return (
+        parts[0] == "名詞"
+        and len(parts) > 1
+        and parts[1] not in {"非自立", "代名詞", "数", "形容動詞語幹"}
+    )
+
+
+@lru_cache(maxsize=128)
+def _prepared_proper_nouns(terms: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {normalize_proper_noun(name) for name in terms},
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def _custom_name_spans(
+    text: str,
+    proper_nouns: Iterable[str],
+) -> list[tuple[int, int]]:
+    folded = _ascii_case_insensitive(text)
+    occupied = [False] * len(text)
+    spans: list[tuple[int, int]] = []
+    names = _prepared_proper_nouns(tuple(proper_nouns))
+    for name in names:
+        folded_name = _ascii_case_insensitive(name)
+        start = 0
+        while True:
+            start = folded.find(folded_name, start)
+            if start < 0:
+                break
+            end = start + len(name)
+            start_is_ascii = name[0].isascii() and name[0].isalnum()
+            end_is_ascii = name[-1].isascii() and name[-1].isalnum()
+            left_is_word = (
+                start > 0
+                and text[start - 1].isascii()
+                and text[start - 1].isalnum()
+            )
+            right_is_word = (
+                end < len(text)
+                and text[end].isascii()
+                and text[end].isalnum()
+            )
+            if (
+                not any(occupied[start:end])
+                and not (start_is_ascii and left_is_word)
+                and not (end_is_ascii and right_is_word)
+            ):
+                spans.append((start, end))
+                occupied[start:end] = [True] * (end - start)
+            start = max(end, start + 1)
+    return sorted(spans)
+
+
+def _noun_terms(
+    text: str,
+    proper_nouns: Iterable[str] = (),
+) -> tuple[_NounTerm, ...]:
+    tokens = list(_TOKENIZER.tokenize(text))
+    token_spans: list[tuple[int, int]] = []
+    offset = 0
+    for token in tokens:
+        end = offset + len(token.surface)
+        token_spans.append((offset, end))
+        offset = end
+
+    custom_spans = _custom_name_spans(text, proper_nouns)
+    custom_token_indices: set[int] = set()
+    terms: list[tuple[int, _NounTerm]] = []
+    for start, end in custom_spans:
+        indices = tuple(
+            index
+            for index, (token_start, token_end) in enumerate(token_spans)
+            if token_start < end and token_end > start
+        )
+        custom_token_indices.update(indices)
+        terms.append(
+            (
+                start,
+                _NounTerm(
+                    surface=text[start:end],
+                    token_indices=indices,
+                    proper=True,
+                ),
+            )
+        )
+
+    segment: list[int] = []
+
+    def flush_segment() -> None:
+        if not segment:
+            return
+        noun_indices = [
+            index for index in segment if _noun_candidate(tokens[index])
+        ]
+        is_proper = any(
+            tokens[index].part_of_speech.split(",")[1] == "固有名詞"
+            or _looks_like_ascii_name(tokens[index].surface)
+            for index in noun_indices
+        )
+        if is_proper:
+            start = token_spans[segment[0]][0]
+            end = token_spans[segment[-1]][1]
+            terms.append(
+                (
+                    start,
+                    _NounTerm(
+                        surface=text[start:end],
+                        token_indices=tuple(noun_indices),
+                        proper=True,
+                    ),
+                )
+            )
+        else:
+            for index in noun_indices:
+                parts = tokens[index].part_of_speech.split(",")
+                surface = tokens[index].surface.strip()
+                if (
+                    parts[1] != "接尾"
+                    and surface
+                    and not (len(surface) < 2 and surface.isascii())
+                ):
+                    terms.append(
+                        (
+                            token_spans[index][0],
+                            _NounTerm(
+                                surface=surface,
+                                token_indices=(index,),
+                                proper=False,
+                            ),
+                        )
+                    )
+        segment.clear()
+
+    for index, token in enumerate(tokens):
+        if index in custom_token_indices:
+            flush_segment()
+            continue
+        if _noun_candidate(token):
+            segment.append(index)
+            continue
+        parts = token.part_of_speech.split(",")
+        if (
+            segment
+            and parts[:2] == ["記号", "空白"]
+            and index + 1 < len(tokens)
+            and index + 1 not in custom_token_indices
+            and _noun_candidate(tokens[index + 1])
+            and all(
+                tokens[noun_index].surface.isascii()
+                for noun_index in segment
+                if _noun_candidate(tokens[noun_index])
+            )
+            and tokens[index + 1].surface.isascii()
+        ):
+            segment.append(index)
+            continue
+        flush_segment()
+    flush_segment()
+
+    terms.sort(key=lambda item: item[0])
+    return tuple(term for _, term in terms)
+
+
+def extract_words(
+    text: str,
+    proper_nouns: Iterable[str] = (),
+) -> tuple[str, ...]:
     """Extract Reudy-style replaceable words (mostly independent nouns)."""
     words: list[str] = []
-    for token in _TOKENIZER.tokenize(text):
-        parts = token.part_of_speech.split(",")
-        if parts[0] != "名詞":
-            continue
-        if len(parts) > 1 and parts[1] in {"非自立", "代名詞", "数"}:
-            continue
-        surface = token.surface.strip()
-        if len(surface) < 2 and surface.isascii():
-            continue
-        if surface and surface not in words:
-            words.append(surface)
+    for term in _noun_terms(text, proper_nouns):
+        if term.surface not in words:
+            words.append(term.surface)
     return tuple(words)
 
 
@@ -112,6 +299,7 @@ class ReudyEngine:
         response_drift_rate: float = 0.85,
         word_splice_rate: float = 0.0,
         word_mutation_rate: float = 0.35,
+        proper_nouns: Iterable[str] = (),
         rng: random.Random | None = None,
     ) -> None:
         self.recent_unused_messages = recent_unused_messages
@@ -131,6 +319,8 @@ class ReudyEngine:
         self._word_mutation_rate = min(
             max(word_mutation_rate, 0.0), 1.0
         )
+        self._proper_nouns: tuple[str, ...] = ()
+        self.set_proper_nouns(proper_nouns)
         self._seed_messages = list(seed_messages or [])
         self._seed_tail_index: dict[str, list[int]] = {}
         for index, message in enumerate(self._seed_messages):
@@ -140,6 +330,31 @@ class ReudyEngine:
     def reset_state(self) -> None:
         self._recent_base_ids.clear()
         self._input_words.clear()
+
+    def set_proper_nouns(self, terms: Iterable[str]) -> None:
+        """Replace the in-memory dictionary without per-message DB access."""
+        normalized: dict[str, str] = {}
+        for term in terms:
+            cleaned = normalize_proper_noun(term)
+            normalized[cleaned.casefold()] = cleaned
+        self._proper_nouns = tuple(normalized.values())
+
+    def add_proper_noun(self, term: str) -> None:
+        normalized = normalize_proper_noun(term)
+        terms = {
+            existing.casefold(): existing
+            for existing in self._proper_nouns
+        }
+        terms[normalized.casefold()] = normalized
+        self._proper_nouns = tuple(terms.values())
+
+    def remove_proper_noun(self, term: str) -> None:
+        key = normalize_proper_noun(term).casefold()
+        self._proper_nouns = tuple(
+            existing
+            for existing in self._proper_nouns
+            if existing.casefold() != key
+        )
 
     def associated_words(
         self,
@@ -169,17 +384,34 @@ class ReudyEngine:
                 scored.append((score, index))
         scored.sort(key=lambda item: item[0], reverse=True)
 
-        query_words = {
+        query_words = set(extract_words(query, self._proper_nouns))
+        query_words.update({
             token.surface
             for token in _TOKENIZER.tokenize(query)
             if self._replaceable_part(token) is not None
-        }
+        })
         weights: Counter[str] = Counter()
         for rank, (_, index) in enumerate(scored[:40]):
             rank_weight = max(1, 40 - rank)
-            for token in _TOKENIZER.tokenize(messages[index].content):
+            content = messages[index].content
+            tokens = list(_TOKENIZER.tokenize(content))
+            proper_terms = [
+                term
+                for term in _noun_terms(content, self._proper_nouns)
+                if term.proper
+            ]
+            protected_indices = {
+                token_index
+                for term in proper_terms
+                for token_index in term.token_indices
+            }
+            for term in proper_terms:
+                if term.surface not in query_words:
+                    weights[term.surface] += rank_weight
+            for token_index, token in enumerate(tokens):
                 if (
-                    self._replaceable_part(token) is not None
+                    token_index not in protected_indices
+                    and self._replaceable_part(token) is not None
                     and token.surface not in query_words
                     and any(char.isalnum() for char in token.surface)
                 ):
@@ -205,10 +437,16 @@ class ReudyEngine:
             "形容詞": [],
         }
         for message in source:
+            for term in _noun_terms(
+                message.content,
+                self._proper_nouns,
+            ):
+                if term.surface not in buckets["名詞"]:
+                    buckets["名詞"].append(term.surface)
             for token in _TOKENIZER.tokenize(message.content):
                 part = self._replaceable_part(token)
                 if (
-                    part in buckets
+                    part in {"動詞", "形容詞"}
                     and any(char.isalnum() for char in token.surface)
                     and token.surface not in buckets[part]
                 ):
@@ -264,13 +502,12 @@ class ReudyEngine:
             else self._rng.sample(candidates, 80)
         )
         for message in sample:
-            for token in _TOKENIZER.tokenize(message.content):
-                if (
-                    self._replaceable_part(token) == "名詞"
-                    and token.surface not in learned_words
-                    and any(char.isalnum() for char in token.surface)
-                ):
-                    learned_words.append(token.surface)
+            for term in _noun_terms(
+                message.content,
+                self._proper_nouns,
+            ):
+                if term.surface not in learned_words:
+                    learned_words.append(term.surface)
         interpretation = (
             f"{self._rng.choice(learned_words)}の予兆"
             if learned_words
@@ -315,13 +552,12 @@ class ReudyEngine:
             else self._rng.sample(sources, 100)
         )
         for message in sample:
-            for token in _TOKENIZER.tokenize(message.content):
-                if (
-                    self._replaceable_part(token) == "名詞"
-                    and token.surface not in nouns
-                    and any(char.isalnum() for char in token.surface)
-                ):
-                    nouns.append(token.surface)
+            for term in _noun_terms(
+                message.content,
+                self._proper_nouns,
+            ):
+                if term.surface not in nouns:
+                    nouns.append(term.surface)
         evidence = self._rng.choice(nouns) if nouns else "宇宙"
         reason = self._rng.choice(
             (
@@ -347,19 +583,17 @@ class ReudyEngine:
         nouns: list[str] = []
         modifiers: list[str] = []
         for message in sources:
+            for term in _noun_terms(
+                message.content,
+                self._proper_nouns,
+            ):
+                if (
+                    1 <= len(term.surface) <= 20
+                    and term.surface not in nouns
+                ):
+                    nouns.append(term.surface)
             for token in _TOKENIZER.tokenize(message.content):
                 parts = token.part_of_speech.split(",")
-                if (
-                    self._replaceable_part(token) == "名詞"
-                    and (
-                        len(parts) < 2
-                        or parts[1] != "形容動詞語幹"
-                    )
-                    and 1 <= len(token.surface) <= 20
-                    and any(char.isalnum() for char in token.surface)
-                    and token.surface not in nouns
-                ):
-                    nouns.append(token.surface)
                 if parts[0] == "形容詞":
                     adjective = (
                         token.base_form
@@ -402,13 +636,18 @@ class ReudyEngine:
         verbs: Counter[str] = Counter()
         adjectives: Counter[str] = Counter()
         for message in messages:
+            nouns.update(
+                term.surface
+                for term in _noun_terms(
+                    message.content,
+                    self._proper_nouns,
+                )
+            )
             for token in _TOKENIZER.tokenize(message.content):
                 part = self._replaceable_part(token)
                 if not any(char.isalnum() for char in token.surface):
                     continue
-                if part == "名詞":
-                    nouns[token.surface] += 1
-                elif part == "動詞":
+                if part == "動詞":
                     verbs[token.surface] += 1
                 elif part == "形容詞":
                     adjectives[token.surface] += 1
@@ -492,7 +731,10 @@ class ReudyEngine:
         if drift:
             return self._rng.choice(candidate_indices), 11
 
-        prompt_words = extract_words(messages[prompt_index].content)
+        prompt_words = extract_words(
+            messages[prompt_index].content,
+            self._proper_nouns,
+        )
         response_index: int | None = None
         for word in prompt_words:
             containing = [
@@ -606,7 +848,11 @@ class ReudyEngine:
         return best_response
 
     def _replace_words(self, base: str, new_words: list[str]) -> str:
-        old_words = list(extract_words(base))
+        old_words = [
+            term.surface
+            for term in _noun_terms(base, self._proper_nouns)
+            if not term.proper
+        ]
         if not old_words or not new_words:
             return base
 
@@ -761,8 +1007,7 @@ class ReudyEngine:
                 return spliced
         return base
 
-    @staticmethod
-    def _text_vector(text: str) -> Counter[str]:
+    def _text_vector(self, text: str) -> Counter[str]:
         vector: Counter[str] = Counter()
         for token in _TOKENIZER.tokenize(text):
             part = token.part_of_speech.split(",")[0]
@@ -775,6 +1020,9 @@ class ReudyEngine:
             )
             if term:
                 vector[f"{part}:{term}"] += 1
+        for noun_term in _noun_terms(text, self._proper_nouns):
+            if noun_term.proper:
+                vector[f"固有:{noun_term.surface.casefold()}"] += 3
         compact = re.sub(r"\s+", "", text)
         for index in range(len(compact) - 1):
             vector[f"字:{compact[index:index + 2]}"] += 1
@@ -871,10 +1119,19 @@ class ReudyEngine:
             return base
 
         tokens = list(_TOKENIZER.tokenize(base))
+        protected_indices = {
+            token_index
+            for term in _noun_terms(base, self._proper_nouns)
+            if term.proper
+            for token_index in term.token_indices
+        }
         replaceable = [
             index
             for index, token in enumerate(tokens)
-            if self._replaceable_noun(token)
+            if (
+                index not in protected_indices
+                and self._replaceable_noun(token)
+            )
         ]
         if not replaceable:
             return base
@@ -883,11 +1140,21 @@ class ReudyEngine:
         for donor_index in self._nearby_donor_indices(
             base, base_index, messages, limit=20
         ):
-            for token in _TOKENIZER.tokenize(
-                messages[donor_index].content
-            ):
+            donor_content = messages[donor_index].content
+            donor_tokens = list(_TOKENIZER.tokenize(donor_content))
+            donor_protected_indices = {
+                token_index
+                for term in _noun_terms(
+                    donor_content,
+                    self._proper_nouns,
+                )
+                if term.proper
+                for token_index in term.token_indices
+            }
+            for token_index, token in enumerate(donor_tokens):
                 if (
-                    self._replaceable_noun(token)
+                    token_index not in donor_protected_indices
+                    and self._replaceable_noun(token)
                     and token.surface not in donor_words
                 ):
                     donor_words.append(token.surface)
@@ -928,7 +1195,7 @@ class ReudyEngine:
     ) -> GeneratedReply | None:
         """Choose and mangle a response using Reudy's decision order."""
         messages = self._seed_messages + dynamic_messages
-        new_words = list(extract_words(input_text))
+        new_words = list(extract_words(input_text, self._proper_nouns))
         drift = self._rng.random() < self._response_drift_rate
         if new_words:
             if self._rng.randrange(5) != 0:

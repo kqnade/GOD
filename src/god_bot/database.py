@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .generator import MemoryMessage
+from .proper_nouns import normalize_proper_noun, proper_noun_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +55,14 @@ class MemoryRepository:
                     ON messages (guild_id, channel_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_messages_author
                     ON messages (guild_id, author_id);
+
+                CREATE TABLE IF NOT EXISTS proper_nouns (
+                    guild_id INTEGER NOT NULL,
+                    term TEXT NOT NULL,
+                    normalized_term TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (guild_id, normalized_term)
+                );
 
                 """
             )
@@ -265,3 +274,43 @@ class MemoryRepository:
                 (guild_id, channel_id),
             ).fetchone()[0]
         return MemoryStats(messages=messages)
+
+    def add_proper_noun(self, guild_id: int, term: str) -> bool:
+        normalized = normalize_proper_noun(term)
+        key = proper_noun_key(normalized)
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO proper_nouns (
+                    guild_id, term, normalized_term, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (guild_id, normalized, key, time.time()),
+            )
+        return cursor.rowcount > 0
+
+    def remove_proper_noun(self, guild_id: int, term: str) -> bool:
+        key = proper_noun_key(term)
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM proper_nouns
+                WHERE guild_id = ? AND normalized_term = ?
+                """,
+                (guild_id, key),
+            )
+        return cursor.rowcount > 0
+
+    def proper_nouns(self, guild_id: int) -> tuple[str, ...]:
+        """Load the guild dictionary in one query for in-memory use."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT term
+                FROM proper_nouns
+                WHERE guild_id = ?
+                ORDER BY normalized_term
+                """,
+                (guild_id,),
+            ).fetchall()
+        return tuple(row["term"] for row in rows)

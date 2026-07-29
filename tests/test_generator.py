@@ -44,7 +44,31 @@ class ReudyGeneratorTests(unittest.TestCase):
 
     def test_extracts_japanese_nouns(self) -> None:
         words = extract_words("攻殻機動隊ってご存知？")
-        self.assertIn("攻殻機動隊", "".join(words))
+        self.assertIn("攻殻機動隊", words)
+
+    def test_groups_automatic_compound_proper_nouns(self) -> None:
+        self.assertEqual(
+            extract_words("夏は揖保乃糸を食べる"),
+            ("夏", "揖保乃糸"),
+        )
+        self.assertEqual(
+            extract_words("田中太郎さんと東京都へ行く"),
+            ("田中太郎さん", "東京都"),
+        )
+        self.assertEqual(
+            extract_words("Visual Studio Codeを使う"),
+            ("Visual Studio Code",),
+        )
+
+    def test_custom_dictionary_groups_unknown_proper_noun(self) -> None:
+        self.assertEqual(
+            extract_words("青空食堂へ行く"),
+            ("青空", "食堂"),
+        )
+        self.assertEqual(
+            extract_words("青空食堂へ行く", ("青空食堂",)),
+            ("青空食堂",),
+        )
 
     def test_keeps_selected_learned_reply_intact(self) -> None:
         messages = [
@@ -156,6 +180,45 @@ class ReudyGeneratorTests(unittest.TestCase):
         self.assertNotIn("布団", mutated)
         self.assertTrue(mutated.endswith("で静かに眠る"))
 
+    def test_does_not_partially_mutate_proper_nouns(self) -> None:
+        messages = [
+            MemoryMessage(1, 1, "揖保乃糸を食べる"),
+            MemoryMessage(2, 2, "カレーを食べる"),
+        ]
+        engine = ReudyEngine(
+            proper_nouns=("揖保乃糸",),
+            recent_unused_messages=0,
+            max_reply_source_length=30,
+            word_mutation_rate=1,
+            rng=random.Random(12),
+        )
+        mutated = engine._mutate_words(
+            messages[0].content,
+            0,
+            messages,
+            force=True,
+        )
+        self.assertEqual(mutated, "揖保乃糸を食べる")
+
+    def test_dictionary_updates_take_effect_without_rebuilding_engine(
+        self,
+    ) -> None:
+        engine = ReudyEngine()
+        self.assertEqual(
+            extract_words("青空食堂へ行く"),
+            ("青空", "食堂"),
+        )
+        engine.add_proper_noun("青空食堂")
+        self.assertIn(
+            "固有:青空食堂",
+            engine._text_vector("青空食堂へ行く"),
+        )
+        engine.remove_proper_noun("青空食堂")
+        self.assertNotIn(
+            "固有:青空食堂",
+            engine._text_vector("青空食堂へ行く"),
+        )
+
     def test_does_not_mutate_from_unrelated_memory(self) -> None:
         messages = [
             MemoryMessage(1, 1, "猫が静かに眠る"),
@@ -211,6 +274,20 @@ class ReudyGeneratorTests(unittest.TestCase):
         words = engine.associated_words("猫", messages)
         self.assertIn("ベッド", words)
         self.assertIn("眠る", words)
+
+    def test_associated_words_keep_registered_names_whole(self) -> None:
+        messages = [
+            MemoryMessage(1, 1, "青空食堂でカレーを食べる"),
+            MemoryMessage(2, 2, "青空食堂で昼食を食べる"),
+        ]
+        engine = ReudyEngine(
+            proper_nouns=("青空食堂",),
+            rng=random.Random(3),
+        )
+        words = engine.associated_words("カレー", messages)
+        self.assertIn("青空食堂", words)
+        self.assertNotIn("青空", words)
+        self.assertNotIn("食堂", words)
 
     def test_builds_fortune_from_learned_words(self) -> None:
         messages = [
@@ -277,6 +354,18 @@ class ReudyGeneratorTests(unittest.TestCase):
         self.assertIn("今日の記憶: 3件・2人", result)
         self.assertIn("猫", result)
         self.assertIn("雑な要約:", result)
+
+    def test_summary_keeps_registered_names_whole(self) -> None:
+        messages = [
+            MemoryMessage(1, 1, "青空食堂で食べる"),
+            MemoryMessage(2, 2, "青空食堂で話す"),
+        ]
+        engine = ReudyEngine(
+            proper_nouns=("青空食堂",),
+            rng=random.Random(5),
+        )
+        result = engine.summarize_messages(messages)
+        self.assertIn("頻出語: 青空食堂", result)
 
     def test_samurai_persona(self) -> None:
         self.assertEqual(

@@ -14,7 +14,7 @@ import discord
 from discord import app_commands
 
 from .amedas import AmedasError, latest_amedas_image
-from .commands import build_memory_group
+from .commands import build_dictionary_group, build_memory_group
 from .config import Config
 from .database import MemoryRepository
 from .earthquake import EarthquakeError, latest_earthquake
@@ -106,6 +106,15 @@ class LearningBot(discord.Client):
             "Loaded %d seed corpus messages",
             len(self._seed_memories),
         )
+        proper_nouns = await asyncio.to_thread(
+            self.repository.proper_nouns,
+            self.config.target_guild_id,
+        )
+        self._engine.set_proper_nouns(proper_nouns)
+        LOGGER.info(
+            "Loaded %d custom proper nouns",
+            len(proper_nouns),
+        )
 
         self.tree.add_command(
             build_memory_group(
@@ -113,6 +122,14 @@ class LearningBot(discord.Client):
                 self._reset_memory_state,
                 target_guild_id=self.config.target_guild_id,
                 target_channel_id=self.config.target_channel_id,
+            )
+        )
+        self.tree.add_command(
+            build_dictionary_group(
+                self.repository,
+                self._engine.add_proper_noun,
+                self._engine.remove_proper_noun,
+                target_guild_id=self.config.target_guild_id,
             )
         )
         self.tree.on_error = self._on_app_command_error

@@ -93,6 +93,40 @@ class MemoryRepositoryTests(unittest.TestCase):
             ["これは残る"],
         )
 
+    def test_manages_proper_noun_dictionary_per_guild(self) -> None:
+        self.assertTrue(self.repository.add_proper_noun(1, "揖保乃糸"))
+        self.assertFalse(self.repository.add_proper_noun(1, "揖保乃糸"))
+        self.assertTrue(self.repository.add_proper_noun(1, "OpenAI"))
+        self.assertFalse(self.repository.add_proper_noun(1, "openai"))
+        self.assertTrue(self.repository.add_proper_noun(2, "OpenAI"))
+
+        self.assertEqual(
+            set(self.repository.proper_nouns(1)),
+            {"揖保乃糸", "OpenAI"},
+        )
+        self.assertEqual(
+            self.repository.proper_nouns(2),
+            ("OpenAI",),
+        )
+
+        self.assertTrue(self.repository.remove_proper_noun(1, "OPENAI"))
+        self.assertFalse(self.repository.remove_proper_noun(1, "OPENAI"))
+        self.assertEqual(
+            self.repository.proper_nouns(1),
+            ("揖保乃糸",),
+        )
+
+    def test_normalizes_dictionary_entries(self) -> None:
+        self.assertTrue(
+            self.repository.add_proper_noun(1, "  ＯｐｅｎＡＩ   Japan  ")
+        )
+        self.assertEqual(
+            self.repository.proper_nouns(1),
+            ("OpenAI Japan",),
+        )
+        with self.assertRaises(ValueError):
+            self.repository.add_proper_noun(1, "？？？")
+
 
 if __name__ == "__main__":
     unittest.main()
