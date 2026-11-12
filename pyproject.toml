@@ -23,14 +23,14 @@ classifiers = [
 ]
 dependencies = [
   "discord.py==2.7.1",
-  "Janome==0.5.0",
+  "Janome==0.5.2",
   "Pillow==12.3.0",
   "qrcode==8.2",
 ]
 
 [dependency-groups]
 dev = [
-  "ruff==0.16.10",
+  "ruff==0.17.5",
 ]
 
 [project.scripts]
